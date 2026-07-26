@@ -34,14 +34,15 @@ const saleLineItemSchema = new Schema(
   { _id: false }
 );
 
-const stockDeductionSchema = new Schema(
+/** Snapshot of base units deducted — used to restore stock on void */
+const stockAdjustmentSchema = new Schema(
   {
-    materialId: {
+    menuItemId: {
       type: Schema.Types.ObjectId,
-      ref: "InventoryItem",
+      ref: "MenuItem",
       required: true,
     },
-    qty: {
+    baseQty: {
       type: Number,
       required: true,
       min: 0,
@@ -88,13 +89,6 @@ const saleSchema = new Schema(
       min: 0,
     },
 
-    costOfGoods: {
-      type: Number,
-      required: true,
-      min: 0,
-      default: 0,
-    },
-
     paymentMethod: {
       type: String,
       enum: ["Cash", "UPI"],
@@ -109,8 +103,8 @@ const saleSchema = new Schema(
       index: true,
     },
 
-    stockDeductions: {
-      type: [stockDeductionSchema],
+    stockAdjustments: {
+      type: [stockAdjustmentSchema],
       default: [],
     },
 

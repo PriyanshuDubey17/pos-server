@@ -4,6 +4,7 @@ const Restaurant = require("../models/Restaurant");
 const { Category, MenuItem } = require("../models/Menu");
 const ApiError = require("../utils/ApiError");
 const { withMongoTransaction } = require("../utils/withMongoTransaction");
+const { resolveStockDeduct } = require("../utils/menuStock");
 
 /** Fixed POS payment options — not restaurant-configurable */
 const ALLOWED_PAYMENT_METHODS = ["Cash", "UPI"];
@@ -191,6 +192,8 @@ const applyConfirmSale = async ({
   restaurant.tokenDate = getTodayTokenDate();
 
   const saleLines = [];
+  /** Aggregate base qty needed per menu item (same item multiple lines) */
+  const stockNeedByItemId = new Map();
 
   for (const cartLine of cartItems) {
     const menuItem = menuById.get(String(cartLine.menuItemId));
@@ -201,7 +204,7 @@ const applyConfirmSale = async ({
       );
     }
 
-    const { unitPrice, name } = resolveUnitPriceAndName(
+    const { unitPrice, name, variantName } = resolveUnitPriceAndName(
       menuItem,
       cartLine.variantName,
     );
@@ -215,6 +218,39 @@ const applyConfirmSale = async ({
       unitPrice,
       lineTotal,
     });
+
+    if (menuItem.stockEnabled) {
+      const deductPerUnit = resolveStockDeduct(menuItem, variantName);
+      const need = deductPerUnit * qty;
+      const key = String(menuItem._id);
+      stockNeedByItemId.set(key, (stockNeedByItemId.get(key) || 0) + need);
+    }
+  }
+
+  const stockAdjustments = [];
+  for (const [menuItemId, baseQty] of stockNeedByItemId.entries()) {
+    const menuItem = menuById.get(menuItemId);
+    const updated = await MenuItem.findOneAndUpdate(
+      {
+        _id: menuItemId,
+        restaurantId,
+        stockEnabled: true,
+        isDeleted: false,
+        stockQty: { $gte: baseQty },
+      },
+      { $inc: { stockQty: -baseQty } },
+      { session, returnDocument: "after" },
+    );
+    if (!updated) {
+      throw new ApiError(
+        `Not enough stock for ${menuItem?.name || "item"}`,
+        400,
+      );
+    }
+    stockAdjustments.push({
+      menuItemId: updated._id,
+      baseQty,
+    });
   }
 
   const totalAmount = saleLines.reduce((sum, line) => sum + line.lineTotal, 0);
@@ -226,10 +262,9 @@ const applyConfirmSale = async ({
     soldAt,
     items: saleLines,
     totalAmount,
-    costOfGoods: 0,
     paymentMethod,
     status: "completed",
-    stockDeductions: [],
+    stockAdjustments,
     createdByUserId: userId,
   };
 
@@ -250,7 +285,8 @@ const confirmSaleWithEffects = async (payload) =>
 
 /**
  * Core void logic — always runs inside withMongoTransaction(session).
- * Does not touch Restaurant.lastTokenNo. No inventory restore.
+ * Does not change token sequence (Restaurant.lastTokenNo).
+ * Restores stock from sale.stockAdjustments snapshot when present.
  */
 const applyVoidSale = async ({ restaurantId, userId, saleId, session }) => {
   const sale = await Sale.findOne({ _id: saleId, restaurantId }).session(
@@ -267,6 +303,24 @@ const applyVoidSale = async ({ restaurantId, userId, saleId, session }) => {
   sale.voidedAt = new Date();
   sale.voidedByUserId = userId;
   await sale.save({ session });
+
+  const adjustments = Array.isArray(sale.stockAdjustments)
+    ? sale.stockAdjustments
+    : [];
+
+  for (const row of adjustments) {
+    const baseQty = Number(row.baseQty);
+    if (!Number.isFinite(baseQty) || baseQty <= 0) continue;
+
+    await MenuItem.findOneAndUpdate(
+      {
+        _id: row.menuItemId,
+        restaurantId,
+      },
+      { $inc: { stockQty: baseQty } },
+      { session },
+    );
+  }
 
   return sale;
 };
@@ -294,7 +348,7 @@ exports.getPosMenu = async (req, res, next) => {
       })
         .sort({ displayOrder: 1, name: 1 })
         .select(
-          "_id name category price variants isVeg image displayOrder",
+          "_id name category price variants isVeg image displayOrder stockEnabled stockQty baseUnit stockDeduct",
         )
         .lean(),
       Restaurant.findById(restaurantId)
@@ -327,10 +381,15 @@ exports.getPosMenu = async (req, res, next) => {
             name: v.name,
             price: v.price,
             isDefault: !!v.isDefault,
+            stockDeduct: v.stockDeduct ?? null,
           })),
           isVeg: item.isVeg,
           image: item.image,
           displayOrder: item.displayOrder,
+          stockEnabled: !!item.stockEnabled,
+          stockQty: item.stockEnabled ? Number(item.stockQty) || 0 : null,
+          baseUnit: item.stockEnabled ? item.baseUnit : null,
+          stockDeduct: item.stockEnabled ? item.stockDeduct ?? null : null,
         };
       });
 
@@ -540,7 +599,7 @@ exports.confirmSale = async (req, res, next) => {
 };
 
 /* ==========================================================
- *  Void sale (keep token; no inventory restore)
+ *  Void sale (keep token; status only)
  * ========================================================== */
 
 exports.voidSale = async (req, res, next) => {

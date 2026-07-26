@@ -88,12 +88,6 @@ const restaurantSchema = new Schema(
       type: printerSettingsSchema,
       default: () => ({}),
     },
-
-    /** When true, POS confirm rejects menu items with an empty recipe */
-    blockSalesWithoutRecipe: {
-      type: Boolean,
-      default: false,
-    },
   },
   { timestamps: true }
 );

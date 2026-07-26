@@ -4,7 +4,7 @@ const ApiError = require("./ApiError");
 /**
  * Run work inside a MongoDB multi-document transaction.
  * Requires a replica set (or Atlas). Does NOT fall back to non-transactional
- * writes — stock/sale mutations must be atomic.
+ * writes — sale mutations must be atomic.
  *
  * Local/dev: start mongod with --replSet (or use Atlas).
  *
@@ -30,7 +30,7 @@ const withMongoTransaction = async (work) => {
 
     if (isTxnUnsupported) {
       throw new ApiError(
-        "Database must run as a replica set for sales and stock updates. Contact support.",
+        "Database must run as a replica set for sales. Contact support.",
         503,
       );
     }

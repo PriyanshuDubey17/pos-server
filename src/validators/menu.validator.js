@@ -32,6 +32,54 @@ const optionalBoolean = z.preprocess((val) => {
   return val;
 }, z.boolean().optional());
 
+const refineStockRules = (data, ctx, { requireStockFields }) => {
+  const stockEnabled = data.stockEnabled === true;
+  if (!stockEnabled) return;
+
+  if (!data.baseUnit) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: "baseUnit is required when stock is enabled",
+      path: ["baseUnit"],
+    });
+  }
+
+  const hasVariants = Array.isArray(data.variants) && data.variants.length > 0;
+
+  if (hasVariants) {
+    data.variants.forEach((variant, index) => {
+      if (typeof variant.stockDeduct !== "number" || variant.stockDeduct <= 0) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: "Each variant needs stockDeduct greater than 0 when stock is enabled",
+          path: ["variants", index, "stockDeduct"],
+        });
+      }
+    });
+  } else if (requireStockFields || data.stockEnabled === true) {
+    // Create always has variants array (possibly empty). Update may omit variants —
+    // when enabling stock without variants in payload, stockDeduct on item is required
+    // if variants are empty or absent (controller merges for update).
+    if (data.variants !== undefined && !hasVariants) {
+      if (typeof data.stockDeduct !== "number" || data.stockDeduct <= 0) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: "stockDeduct greater than 0 is required when stock is enabled without variants",
+          path: ["stockDeduct"],
+        });
+      }
+    } else if (requireStockFields && !hasVariants) {
+      if (typeof data.stockDeduct !== "number" || data.stockDeduct <= 0) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: "stockDeduct greater than 0 is required when stock is enabled without variants",
+          path: ["stockDeduct"],
+        });
+      }
+    }
+  }
+};
+
 /* ── Category Sub-Schemas ── */
 const categoryBase = z.object({
   name: z
@@ -54,6 +102,7 @@ const variantSchema = z.object({
   name: z.string().trim().min(1, "Variant name is required").max(100),
   price: z.number().min(0, "Price cannot be negative"),
   isDefault: z.boolean().default(false),
+  stockDeduct: z.number().min(0, "Stock deduct cannot be negative").optional().nullable(),
 });
 
 const menuItemBase = z.object({
@@ -73,6 +122,14 @@ const menuItemBase = z.object({
   isVeg: z.boolean({ required_error: "isVeg flag is required" }),
   isAvailable: z.boolean().default(true),
   displayOrder: z.number().int().min(0).default(0),
+  stockEnabled: z.boolean().default(false),
+  baseUnit: z
+    .preprocess(
+      emptyStringToNull,
+      z.enum(["piece", "gram"]).nullable().optional()
+    ),
+  stockQty: z.number().min(0, "Stock qty cannot be negative").optional(),
+  stockDeduct: z.number().min(0, "Stock deduct cannot be negative").optional().nullable(),
 });
 
 const createMenuItemSchema = menuItemBase
@@ -81,7 +138,6 @@ const createMenuItemSchema = menuItemBase
     const hasPrice = typeof data.price === "number";
     const hasVariants = data.variants && data.variants.length > 0;
 
-    // XOR: Must have at least one
     if (!hasPrice && !hasVariants) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
@@ -90,7 +146,6 @@ const createMenuItemSchema = menuItemBase
       });
     }
 
-    // Only 1 default variant allowed
     if (hasVariants) {
       const defaults = data.variants.filter((v) => v.isDefault);
       if (defaults.length > 1) {
@@ -101,23 +156,31 @@ const createMenuItemSchema = menuItemBase
         });
       }
     }
+
+    refineStockRules(data, ctx, { requireStockFields: true });
   })
-  // Auto-clean XOR: variants win over price
   .transform((data) => {
+    let next = data;
     if (data.variants && data.variants.length > 0) {
-      return { ...data, price: null };
+      next = { ...next, price: null, stockDeduct: null };
+    } else if (typeof data.price === "number") {
+      next = { ...next, variants: [] };
     }
-    if (typeof data.price === "number") {
-      return { ...data, variants: [] };
+    if (!next.stockEnabled) {
+      next = {
+        ...next,
+        baseUnit: null,
+        stockDeduct: null,
+        stockQty: typeof next.stockQty === "number" ? next.stockQty : 0,
+      };
     }
-    return data;
+    return next;
   });
 
 const updateMenuItemSchema = menuItemBase
   .partial()
   .strict()
   .superRefine((data, ctx) => {
-    // Only 1 default variant allowed (when variants are in the payload)
     if (data.variants && data.variants.length > 0) {
       const defaults = data.variants.filter((v) => v.isDefault);
       if (defaults.length > 1) {
@@ -128,14 +191,29 @@ const updateMenuItemSchema = menuItemBase
         });
       }
     }
+
+    if (data.stockEnabled === true) {
+      refineStockRules(data, ctx, { requireStockFields: false });
+    }
   })
-  // Auto-clean XOR for partial updates
   .transform((data) => {
     if (data.variants && data.variants.length > 0) {
-      return { ...data, price: null };
+      return { ...data, price: null, stockDeduct: null };
+    }
+    if (data.stockEnabled === false) {
+      return { ...data, baseUnit: null, stockDeduct: null };
     }
     return data;
   });
+
+const adjustStockSchema = z
+  .object({
+    qty: z
+      .number({ required_error: "Quantity is required" })
+      .positive("Quantity must be greater than 0"),
+    unit: z.enum(["piece", "gram", "kg"]).optional(),
+  })
+  .strict();
 
 /* ── List / query schemas ── */
 const listMenuItemsQuerySchema = z.object({
@@ -189,14 +267,12 @@ const validate = (schema) => (req, _res, next) => {
     const result = schema.safeParse(req.body);
 
     if (!result.success) {
-      // Safely extract errors — guard against unexpected Zod error shapes
       const zodErrors = result.error?.issues || result.error?.errors || [];
       const errors = zodErrors.map((e) => ({
         field: (e.path || []).join(".") || "unknown",
         message: e.message || "Invalid value",
       }));
 
-      // Provide a human-readable summary as the top-level message
       const summary = errors.length > 0
         ? errors.map((e) => e.field !== "unknown" ? `${e.field}: ${e.message}` : e.message).join("; ")
         : "Validation failed";
@@ -204,10 +280,9 @@ const validate = (schema) => (req, _res, next) => {
       return next(new ApiError(summary, 400, errors));
     }
 
-    req.body = result.data; // sanitized
+    req.body = result.data;
     next();
   } catch (err) {
-    // If Zod itself throws (shouldn't happen with safeParse, but safety net)
     return next(new ApiError("Invalid request data. Please check your input.", 400));
   }
 };
@@ -218,6 +293,7 @@ module.exports = {
   createMenuItemSchema,
   updateMenuItemSchema,
   listMenuItemsQuerySchema,
+  adjustStockSchema,
   validate,
   validateQuery,
 };

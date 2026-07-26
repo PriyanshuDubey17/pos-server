@@ -10,6 +10,7 @@ const ACCESS_PLANS = Object.freeze(["full"]);
 const MODULES = Object.freeze([
   "menu",
   "pos",
+  "stock",
   "reports",
   "settings",
   "print",
@@ -20,6 +21,7 @@ const PLAN_MODULES = Object.freeze({
   full: Object.freeze([
     "menu",
     "pos",
+    "stock",
     "reports",
     "settings",
     "print",

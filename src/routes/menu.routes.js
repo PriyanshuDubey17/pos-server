@@ -13,6 +13,8 @@ const {
   deleteMenuItem,
   restoreMenuItem,
   getCloudinarySignature,
+  listStockItems,
+  adjustStock,
 } = require("../controllers/menu.controller");
 
 const {
@@ -23,12 +25,16 @@ const {
   createMenuItemSchema,
   updateMenuItemSchema,
   listMenuItemsQuerySchema,
+  adjustStockSchema,
 } = require("../validators/menu.validator");
 
 const { authGeneralLimiter } = require("../middlewares/rateLimiter");
 const { requireMenuWrite } = require("../middlewares/requireMenuWrite");
+const { requireStockAccess } = require("../middlewares/requireStockAccess");
 
 router.get("/upload/signature", getCloudinarySignature);
+
+router.get("/stock", requireStockAccess, listStockItems);
 
 /* ==========================================================
  *  Categories
@@ -79,6 +85,15 @@ router.post(
   authGeneralLimiter,
   requireMenuWrite,
   restoreMenuItem,
+);
+
+router.post(
+  "/items/:id/stock",
+  authGeneralLimiter,
+  requireStockAccess,
+  requireMenuWrite,
+  validate(adjustStockSchema),
+  adjustStock,
 );
 
 router

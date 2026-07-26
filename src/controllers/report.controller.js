@@ -74,27 +74,45 @@ exports.getReportSummary = async (req, res, next) => {
     const rangeStart = kolkataDayStartUtc(from);
     const rangeEnd = kolkataDayStartUtc(addDaysYmd(to, 1));
 
-    const saleRows = await Sale.aggregate([
-      {
-        $match: {
-          restaurantId: restaurantObjectId,
-          soldAt: { $gte: rangeStart, $lt: rangeEnd },
-          status: { $ne: "voided" },
-        },
-      },
-      {
-        $group: {
-          _id: {
-            $dateToString: {
-              format: "%Y-%m-%d",
-              date: "$soldAt",
-              timezone: KOLKATA_TZ,
+    const matchStage = {
+      restaurantId: restaurantObjectId,
+      soldAt: { $gte: rangeStart, $lt: rangeEnd },
+      status: { $ne: "voided" },
+    };
+
+    const [saleRows, itemRows] = await Promise.all([
+      Sale.aggregate([
+        { $match: matchStage },
+        {
+          $group: {
+            _id: {
+              $dateToString: {
+                format: "%Y-%m-%d",
+                date: "$soldAt",
+                timezone: KOLKATA_TZ,
+              },
             },
+            sale: { $sum: "$totalAmount" },
+            saleCount: { $sum: 1 },
           },
-          sale: { $sum: "$totalAmount" },
-          saleCount: { $sum: 1 },
         },
-      },
+      ]),
+      Sale.aggregate([
+        { $match: matchStage },
+        { $unwind: "$items" },
+        {
+          $group: {
+            _id: {
+              menuItemId: "$items.menuItemId",
+              name: "$items.name",
+            },
+            qty: { $sum: "$items.qty" },
+            amount: { $sum: "$items.lineTotal" },
+          },
+        },
+        { $sort: { qty: -1, amount: -1 } },
+        { $limit: 100 },
+      ]),
     ]);
 
     const saleByDate = new Map(
@@ -131,6 +149,13 @@ exports.getReportSummary = async (req, res, next) => {
       0,
     );
 
+    const topItems = itemRows.map((row) => ({
+      menuItemId: row._id.menuItemId,
+      name: row._id.name,
+      qty: Number(row.qty) || 0,
+      amount: Number(row.amount) || 0,
+    }));
+
     res.status(200).json({
       success: true,
       data: {
@@ -138,6 +163,7 @@ exports.getReportSummary = async (req, res, next) => {
         range: { from, to },
         totals,
         days,
+        topItems,
       },
     });
   } catch (error) {

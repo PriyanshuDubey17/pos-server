@@ -2,6 +2,10 @@ const mongoose = require("mongoose");
 const { Category, MenuItem } = require("../models/Menu");
 const ApiError = require("../utils/ApiError");
 const { cloudinary, deleteImageFromCloudinary } = require("../utils/cloudinary");
+const {
+  assertMenuItemStockConfig,
+  resolveMinStockDeduct,
+} = require("../utils/menuStock");
 
 /* ==========================================================
  *  Helpers
@@ -395,7 +399,7 @@ exports.getMenuItemStats = async (req, res, next) => {
       {
         $facet: {
           total: [{ $count: "count" }],
-          inStock: [{ $match: { isAvailable: true } }, { $count: "count" }],
+          available: [{ $match: { isAvailable: true } }, { $count: "count" }],
           veg: [{ $match: { isVeg: true } }, { $count: "count" }],
           nonVeg: [{ $match: { isVeg: false } }, { $count: "count" }],
         },
@@ -408,7 +412,7 @@ exports.getMenuItemStats = async (req, res, next) => {
       success: true,
       data: {
         total: facet.total?.[0]?.count ?? 0,
-        inStock: facet.inStock?.[0]?.count ?? 0,
+        available: facet.available?.[0]?.count ?? 0,
         veg: facet.veg?.[0]?.count ?? 0,
         nonVeg: facet.nonVeg?.[0]?.count ?? 0,
       },
@@ -455,11 +459,20 @@ exports.createMenuItem = async (req, res, next) => {
     // --- XOR Price & Variants (Zod transform already cleans, this is a safety net) ---
     if (req.body.variants && req.body.variants.length > 0) {
       req.body.price = null;
+      req.body.stockDeduct = null;
     } else if (req.body.price !== undefined && req.body.price !== null) {
       req.body.variants = [];
     } else {
       throw new ApiError("Either a base price or variants must be provided", 400);
     }
+
+    if (!req.body.stockEnabled) {
+      req.body.baseUnit = null;
+      req.body.stockDeduct = null;
+      if (req.body.stockQty === undefined) req.body.stockQty = 0;
+    }
+
+    assertMenuItemStockConfig(req.body);
 
     const {
       restaurantId: _ignored,
@@ -547,13 +560,35 @@ exports.updateMenuItem = async (req, res, next) => {
     const mergedPrice = req.body.price !== undefined ? req.body.price : oldItem.price;
 
     if (mergedVariants && mergedVariants.length > 0) {
-      req.body.price = null; // Strip price if variants exist
+      req.body.price = null;
+      req.body.stockDeduct = null;
     } else if (mergedPrice != null) {
-      // If we are keeping a price, ensure variants are wiped out properly on the update
-      req.body.variants = []; 
+      req.body.variants = [];
     } else {
       throw new ApiError("Base price or variants must be provided", 400);
     }
+
+    const mergedStockEnabled =
+      req.body.stockEnabled !== undefined
+        ? req.body.stockEnabled
+        : oldItem.stockEnabled;
+    if (!mergedStockEnabled) {
+      req.body.baseUnit = null;
+      req.body.stockDeduct = null;
+    }
+
+    const stockPreview = {
+      stockEnabled: mergedStockEnabled,
+      baseUnit:
+        req.body.baseUnit !== undefined ? req.body.baseUnit : oldItem.baseUnit,
+      stockDeduct:
+        req.body.stockDeduct !== undefined
+          ? req.body.stockDeduct
+          : oldItem.stockDeduct,
+      variants:
+        req.body.variants !== undefined ? req.body.variants : oldItem.variants,
+    };
+    assertMenuItemStockConfig(stockPreview);
 
     // Handle image changes:
     // 1. New image uploaded (different publicId) → delete old
@@ -662,6 +697,125 @@ exports.restoreMenuItem = async (req, res, next) => {
       success: true,
       message: "Menu item restored successfully",
       data: item,
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+/* ==========================================================
+ *  Stock list + receive
+ * ========================================================== */
+
+exports.listStockItems = async (req, res, next) => {
+  try {
+    const restaurantId = getTenantRestaurantId(req);
+
+    const items = await MenuItem.find({
+      restaurantId,
+      isDeleted: false,
+      stockEnabled: true,
+    })
+      .sort({ name: 1 })
+      .select(
+        "_id name category baseUnit stockQty stockDeduct variants isAvailable image",
+      )
+      .populate("category", "name isActive")
+      .lean();
+
+    const data = items.map((item) => {
+      const minDeduct = resolveMinStockDeduct(item);
+      const stockQty = Number(item.stockQty) || 0;
+
+      return {
+        _id: item._id,
+        name: item.name,
+        category: item.category,
+        baseUnit: item.baseUnit,
+        stockQty,
+        stockDeduct: item.stockDeduct,
+        variants: (item.variants || []).map((v) => ({
+          name: v.name,
+          price: v.price,
+          isDefault: !!v.isDefault,
+          stockDeduct: v.stockDeduct,
+        })),
+        isAvailable: item.isAvailable,
+        image: item.image,
+        minDeduct,
+      };
+    });
+
+    res.status(200).json({
+      success: true,
+      data,
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+exports.adjustStock = async (req, res, next) => {
+  try {
+    const restaurantId = getTenantRestaurantId(req);
+    const { id } = req.params;
+    assertValidObjectId(id, "Menu Item ID");
+
+    const item = await MenuItem.findOne({
+      _id: id,
+      restaurantId,
+      isDeleted: false,
+    });
+    if (!item) {
+      throw new ApiError("Menu item not found", 404);
+    }
+    if (!item.stockEnabled) {
+      throw new ApiError("Stock tracking is not enabled for this item", 400);
+    }
+    if (item.baseUnit !== "piece" && item.baseUnit !== "gram") {
+      throw new ApiError("Item baseUnit is not configured", 400);
+    }
+
+    const { qty, unit } = req.body;
+    let delta = Number(qty);
+    const receiveUnit = unit || item.baseUnit;
+
+    if (item.baseUnit === "piece") {
+      if (receiveUnit !== "piece") {
+        throw new ApiError("This item uses piece — send unit piece", 400);
+      }
+    } else if (item.baseUnit === "gram") {
+      if (receiveUnit === "kg") {
+        delta = delta * 1000;
+      } else if (receiveUnit !== "gram") {
+        throw new ApiError("This item uses gram — send unit gram or kg", 400);
+      }
+    }
+
+    if (!Number.isFinite(delta) || delta <= 0) {
+      throw new ApiError("Quantity must be greater than 0", 400);
+    }
+
+    const updated = await MenuItem.findOneAndUpdate(
+      { _id: id, restaurantId, stockEnabled: true, isDeleted: false },
+      { $inc: { stockQty: delta } },
+      { returnDocument: "after", runValidators: true },
+    );
+
+    if (!updated) {
+      throw new ApiError("Menu item not found", 404);
+    }
+
+    res.status(200).json({
+      success: true,
+      message: "Stock updated",
+      data: {
+        _id: updated._id,
+        name: updated.name,
+        baseUnit: updated.baseUnit,
+        stockQty: updated.stockQty,
+        delta,
+      },
     });
   } catch (error) {
     next(error);

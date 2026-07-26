@@ -66,6 +66,13 @@ const variantSchema = new Schema(
       type: Boolean,
       default: false,
     },
+
+    /** Base units deducted per 1 sold when parent stockEnabled */
+    stockDeduct: {
+      type: Number,
+      min: 0,
+      default: null,
+    },
   },
   { _id: true }
 );
@@ -138,9 +145,43 @@ const menuItemSchema = new Schema(
       default: false,
       index: true,
     },
+
+    /** When false, POS sales ignore stock entirely */
+    stockEnabled: {
+      type: Boolean,
+      default: false,
+      index: true,
+    },
+
+    /** Warehouse unit when stockEnabled — piece or gram (kg converted on receive) */
+    baseUnit: {
+      type: String,
+      default: null,
+      validate: {
+        validator(value) {
+          return value == null || value === "piece" || value === "gram";
+        },
+        message: "baseUnit must be piece or gram",
+      },
+    },
+
+    stockQty: {
+      type: Number,
+      min: 0,
+      default: 0,
+    },
+
+    /** Base units deducted per 1 sold when item has no variants */
+    stockDeduct: {
+      type: Number,
+      min: 0,
+      default: null,
+    },
   },
   { timestamps: true }
 );
+
+menuItemSchema.index({ restaurantId: 1, stockEnabled: 1, isDeleted: 1 });
 
 /* =========================================================
    INDEXES
