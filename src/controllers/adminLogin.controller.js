@@ -296,7 +296,7 @@ const verifyOtp = async (req, res, next) => {
     const accessToken = generateAccessToken(user);
     const refreshToken = generateRefreshToken(user);
 
-    // Set httpOnly cookies
+    // Set httpOnly cookies (web); also return tokens for mobile Bearer clients
     setTokenCookies(res, accessToken, refreshToken);
 
     // Update lastLoginAt (avoid full-doc validate on legacy fields)
@@ -305,7 +305,11 @@ const verifyOtp = async (req, res, next) => {
     // 🗑️ Delete OTP doc — prevent replay attack
     await Otp.deleteOne({ _id: otpDoc._id });
 
-    const response = new ApiResponse(200, "Login successful", authPayload);
+    const response = new ApiResponse(200, "Login successful", {
+      ...authPayload,
+      accessToken,
+      refreshToken,
+    });
     res.status(200).json(response);
   } catch (error) {
     next(error);
@@ -317,13 +321,34 @@ const verifyOtp = async (req, res, next) => {
    ─────────────────────────────────────────────────────────
    POST /api/admin-login/refresh
 
-   Reads refreshToken from httpOnly cookie → verifies →
-   issues new accessToken → sets new cookie.
+   Reads refresh token from httpOnly cookie, Authorization
+   Bearer, or body.refreshToken → verifies →
+   issues new accessToken → sets cookie + returns tokens.
    ───────────────────────────────────────────────────────── */
+
+const resolveRefreshTokenFromRequest = (req) => {
+  const cookieToken = req.cookies?.[ADMIN_REFRESH_TOKEN];
+  if (cookieToken) return cookieToken;
+
+  const bodyToken = req.body?.refreshToken;
+  if (typeof bodyToken === "string" && bodyToken.trim()) {
+    return bodyToken.trim();
+  }
+
+  const header = req.headers?.authorization;
+  if (header && typeof header === "string") {
+    const [scheme, token] = header.split(" ");
+    if (scheme?.toLowerCase() === "bearer" && token) {
+      return token.trim();
+    }
+  }
+
+  return null;
+};
 
 const refreshToken = async (req, res, next) => {
   try {
-    const token = req.cookies?.[ADMIN_REFRESH_TOKEN];
+    const token = resolveRefreshTokenFromRequest(req);
 
     if (!token) {
       return next(new ApiError("Refresh token missing. Please login.", 401));
@@ -367,17 +392,17 @@ const refreshToken = async (req, res, next) => {
       return next(err);
     }
 
-    // Generate new access token
+    // Generate new access token (keep existing refresh token for mobile clients)
     const newAccessToken = generateAccessToken(user);
 
-    // Set only admin access cookie (refresh stays as-is)
+    // Set only admin access cookie (refresh cookie stays as-is for web)
     res.cookie(ADMIN_ACCESS_TOKEN, newAccessToken, getAdminAccessCookieOptions());
 
-    const response = new ApiResponse(
-      200,
-      "Token refreshed successfully",
-      authPayload,
-    );
+    const response = new ApiResponse(200, "Token refreshed successfully", {
+      ...authPayload,
+      accessToken: newAccessToken,
+      refreshToken: token,
+    });
     res.status(200).json(response);
   } catch (error) {
     next(error);

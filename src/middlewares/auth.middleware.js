@@ -10,13 +10,26 @@ const {
  *  Auth Middlewares
  * ==========================================================
  *
- *  protectAdmin    → Verify adminAccessToken cookie → attach req.user
+ *  protectAdmin    → Verify admin access token from
+ *                    Authorization: Bearer OR httpOnly cookie
  *                    (+ req.restaurant for restaurant_admin)
  *  authorizeRole   → Check req.user.role against allowed roles
  * ========================================================== */
 
+const getBearerToken = (req) => {
+  const header = req.headers?.authorization;
+  if (!header || typeof header !== "string") return null;
+  const [scheme, token] = header.split(" ");
+  if (scheme?.toLowerCase() !== "bearer" || !token) return null;
+  return token.trim();
+};
+
+const resolveAccessToken = (req, tokenCookieName) => {
+  return getBearerToken(req) || req.cookies?.[tokenCookieName] || null;
+};
+
 const verifyAccessToken = async (req, tokenCookieName) => {
-  const token = req.cookies?.[tokenCookieName];
+  const token = resolveAccessToken(req, tokenCookieName);
 
   if (!token) {
     throw new ApiError("Access denied. Please login.", 401);

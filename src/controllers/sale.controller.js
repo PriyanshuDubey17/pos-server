@@ -120,13 +120,22 @@ const buildReceiptPayload = ({ restaurant, sale }) => ({
   receiptCopies: restaurant.printerSettings?.receiptCopies === 2 ? 2 : 1,
 });
 
+/** Normalize printerSettings for API responses */
+const normalizePrinterSettings = (printerSettings = {}) => ({
+  paperWidth: printerSettings.paperWidth === "80" ? "80" : "58",
+  autoPrintOnConfirm: printerSettings.autoPrintOnConfirm !== false,
+  isPaired: !!printerSettings.isPaired,
+  deviceLabel: printerSettings.deviceLabel || null,
+  receiptCopies: printerSettings.receiptCopies === 2 ? 2 : 1,
+});
+
 /**
  * Atomically allocate next daily token (Asia/Kolkata business day).
  * Safe under concurrent confirms.
  */
 const allocateNextTokenNo = async (restaurantId, session) => {
   const today = getTodayTokenDate();
-  const opts = { new: true, session };
+  const opts = { returnDocument: "after", session };
 
   let updated = await Restaurant.findOneAndUpdate(
     { _id: restaurantId, tokenDate: today },
@@ -352,7 +361,7 @@ exports.getPosMenu = async (req, res, next) => {
         )
         .lean(),
       Restaurant.findById(restaurantId)
-        .select("printerSettings.receiptCopies")
+        .select("printerSettings")
         .lean(),
     ]);
 
@@ -393,8 +402,9 @@ exports.getPosMenu = async (req, res, next) => {
         };
       });
 
-    const receiptCopies =
-      restaurant?.printerSettings?.receiptCopies === 2 ? 2 : 1;
+    const printerSettings = normalizePrinterSettings(
+      restaurant?.printerSettings,
+    );
 
     res.status(200).json({
       success: true,
@@ -402,7 +412,10 @@ exports.getPosMenu = async (req, res, next) => {
         categories,
         items: posItems,
         paymentMethods: ALLOWED_PAYMENT_METHODS,
-        receiptCopies,
+        receiptCopies: printerSettings.receiptCopies,
+        autoPrintOnConfirm: printerSettings.autoPrintOnConfirm,
+        paperWidth: printerSettings.paperWidth,
+        printerSettings,
       },
     });
   } catch (error) {
@@ -436,6 +449,78 @@ exports.updateReceiptCopies = async (req, res, next) => {
       success: true,
       message: "Receipt copies updated",
       data: { receiptCopies: savedCopies },
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+/* ==========================================================
+ *  Printer settings (thermal)
+ * ========================================================== */
+
+exports.getPrinterSettings = async (req, res, next) => {
+  try {
+    const restaurantId = getTenantRestaurantId(req);
+    const restaurant = await Restaurant.findById(restaurantId)
+      .select("printerSettings")
+      .lean();
+
+    if (!restaurant) {
+      throw new ApiError("Restaurant not found", 404);
+    }
+
+    res.status(200).json({
+      success: true,
+      data: normalizePrinterSettings(restaurant.printerSettings),
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+exports.updatePrinterSettings = async (req, res, next) => {
+  try {
+    const restaurantId = getTenantRestaurantId(req);
+    const {
+      paperWidth,
+      autoPrintOnConfirm,
+      receiptCopies,
+      deviceLabel,
+      isPaired,
+    } = req.body;
+
+    const $set = {};
+    if (paperWidth !== undefined) {
+      $set["printerSettings.paperWidth"] = paperWidth;
+    }
+    if (autoPrintOnConfirm !== undefined) {
+      $set["printerSettings.autoPrintOnConfirm"] = autoPrintOnConfirm;
+    }
+    if (receiptCopies !== undefined) {
+      $set["printerSettings.receiptCopies"] = receiptCopies;
+    }
+    if (deviceLabel !== undefined) {
+      $set["printerSettings.deviceLabel"] = deviceLabel;
+    }
+    if (isPaired !== undefined) {
+      $set["printerSettings.isPaired"] = isPaired;
+    }
+
+    const restaurant = await Restaurant.findByIdAndUpdate(
+      restaurantId,
+      { $set },
+      { returnDocument: "after", runValidators: true },
+    ).select("printerSettings");
+
+    if (!restaurant) {
+      throw new ApiError("Restaurant not found", 404);
+    }
+
+    res.status(200).json({
+      success: true,
+      message: "Printer settings updated",
+      data: normalizePrinterSettings(restaurant.printerSettings),
     });
   } catch (error) {
     next(error);

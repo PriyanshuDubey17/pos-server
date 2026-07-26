@@ -45,6 +45,37 @@ const updateReceiptCopiesSchema = z
   })
   .strict();
 
+const updatePrinterSettingsSchema = z
+  .object({
+    paperWidth: z
+      .enum(["58", "80"], {
+        errorMap: () => ({ message: "Paper width must be 58 or 80" }),
+      })
+      .optional(),
+    autoPrintOnConfirm: z.boolean().optional(),
+    receiptCopies: z
+      .union([z.literal(1), z.literal(2)], {
+        errorMap: () => ({ message: "Receipt copies must be 1 or 2" }),
+      })
+      .optional(),
+    deviceLabel: z
+      .preprocess(
+        (val) => (val === "" ? null : val),
+        z.string().trim().max(120).nullable().optional(),
+      ),
+    isPaired: z.boolean().optional(),
+  })
+  .strict()
+  .refine(
+    (body) =>
+      body.paperWidth !== undefined ||
+      body.autoPrintOnConfirm !== undefined ||
+      body.receiptCopies !== undefined ||
+      body.deviceLabel !== undefined ||
+      body.isPaired !== undefined,
+    { message: "At least one printer setting is required" },
+  );
+
 const ymdRegex = /^\d{4}-\d{2}-\d{2}$/;
 
 const listSalesQuerySchema = z.object({
@@ -157,6 +188,7 @@ const validateParams = (schema) => (req, _res, next) => {
 module.exports = {
   confirmSaleSchema,
   updateReceiptCopiesSchema,
+  updatePrinterSettingsSchema,
   listSalesQuerySchema,
   saleIdParamSchema,
   validate,

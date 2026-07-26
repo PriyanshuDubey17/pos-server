@@ -5,6 +5,8 @@ const {
   getPosMenu,
   confirmSale,
   updateReceiptCopies,
+  getPrinterSettings,
+  updatePrinterSettings,
   listSales,
   getSaleReceipt,
   voidSale,
@@ -15,6 +17,7 @@ const {
   validateParams,
   confirmSaleSchema,
   updateReceiptCopiesSchema,
+  updatePrinterSettingsSchema,
   listSalesQuerySchema,
   saleIdParamSchema,
 } = require("../validators/sale.validator");
@@ -24,6 +27,13 @@ const { requirePosAccess } = require("../middlewares/requirePosAccess");
 router.use(requirePosAccess);
 
 router.get("/pos-menu", getPosMenu);
+router.get("/printer-settings", getPrinterSettings);
+router.patch(
+  "/printer-settings",
+  authGeneralLimiter,
+  validate(updatePrinterSettingsSchema),
+  updatePrinterSettings,
+);
 router.get("/", validateQuery(listSalesQuerySchema), listSales);
 router.get(
   "/:id/receipt",
