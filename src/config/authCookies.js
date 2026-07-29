@@ -4,12 +4,10 @@ const ADMIN_REFRESH_TOKEN = "adminRefreshToken";
 const getCookieBaseOptions = () => {
   const isProduction = process.env.NODE_ENV === "production";
 
-  // Production uses sameSite "none" so admin-panel on a different origin
-  // can send httpOnly cookies with credentials (requires secure: true).
   return {
     httpOnly: true,
     secure: isProduction,
-    sameSite: isProduction ? "none" : "lax",
+    sameSite: isProduction ? "strict" : "lax",
   };
 };
 
