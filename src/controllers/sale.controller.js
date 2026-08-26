@@ -9,6 +9,11 @@ const { resolveStockDeduct } = require("../utils/menuStock");
 /** Fixed POS payment options — not restaurant-configurable */
 const ALLOWED_PAYMENT_METHODS = ["Cash", "UPI"];
 
+const TOKEN_LABEL_OPTIONS = ["Token", "Bill", "Order"];
+
+const resolveTokenLabel = (value) =>
+  TOKEN_LABEL_OPTIONS.includes(value) ? value : "Token";
+
 /* ==========================================================
  *  Helpers
  * ========================================================== */
@@ -103,22 +108,37 @@ const resolveUnitPriceAndName = (menuItem, variantName) => {
   };
 };
 
-const buildReceiptPayload = ({ restaurant, sale }) => ({
-  restaurantName: restaurant.name,
-  tokenNo: sale.tokenNo,
-  soldAt: sale.soldAt,
-  status: sale.status || "completed",
-  items: sale.items.map((line) => ({
-    name: line.name,
-    qty: line.qty,
-    unitPrice: line.unitPrice,
-    lineTotal: line.lineTotal,
-  })),
-  totalAmount: sale.totalAmount,
-  paymentMethod: sale.paymentMethod,
-  paperWidth: restaurant.printerSettings?.paperWidth || "58",
-  receiptCopies: restaurant.printerSettings?.receiptCopies === 2 ? 2 : 1,
-});
+const buildReceiptPayload = ({ restaurant, sale }) => {
+  const saleRecord = sale.toObject ? sale.toObject() : sale;
+  const hasSalePhone = Object.prototype.hasOwnProperty.call(
+    saleRecord,
+    "phone",
+  );
+  const restaurantPhone = String(restaurant.phone || "").trim() || null;
+  const phone = hasSalePhone ? saleRecord.phone : restaurantPhone;
+
+  return {
+    restaurantName: restaurant.name,
+    phone: phone || null,
+    tokenLabel: resolveTokenLabel(
+      saleRecord.tokenLabel || restaurant.printerSettings?.tokenLabel,
+    ),
+    tokenNo: sale.tokenNo,
+    soldAt: sale.soldAt,
+    status: sale.status || "completed",
+    items: sale.items.map((line) => ({
+      name: line.name,
+      qty: line.qty,
+      unitPrice: line.unitPrice,
+      lineTotal: line.lineTotal,
+    })),
+    totalAmount: sale.totalAmount,
+    paymentMethod: sale.paymentMethod,
+    paperWidth: restaurant.printerSettings?.paperWidth || "58",
+    receiptCopies: restaurant.printerSettings?.receiptCopies === 2 ? 2 : 1,
+    printLargeToken: restaurant.printerSettings?.printLargeToken !== false,
+  };
+};
 
 /** Normalize printerSettings for API responses */
 const normalizePrinterSettings = (printerSettings = {}) => ({
@@ -127,6 +147,8 @@ const normalizePrinterSettings = (printerSettings = {}) => ({
   isPaired: !!printerSettings.isPaired,
   deviceLabel: printerSettings.deviceLabel || null,
   receiptCopies: printerSettings.receiptCopies === 2 ? 2 : 1,
+  tokenLabel: resolveTokenLabel(printerSettings.tokenLabel),
+  printLargeToken: printerSettings.printLargeToken !== false,
 });
 
 /**
@@ -275,6 +297,8 @@ const applyConfirmSale = async ({
     status: "completed",
     stockAdjustments,
     createdByUserId: userId,
+    tokenLabel: resolveTokenLabel(restaurant.printerSettings?.tokenLabel),
+    phone: String(restaurant.phone || "").trim() || null,
   };
 
   const [sale] = await Sale.create([salePayload], { session });
@@ -488,6 +512,8 @@ exports.updatePrinterSettings = async (req, res, next) => {
       receiptCopies,
       deviceLabel,
       isPaired,
+      tokenLabel,
+      printLargeToken,
     } = req.body;
 
     const $set = {};
@@ -505,6 +531,12 @@ exports.updatePrinterSettings = async (req, res, next) => {
     }
     if (isPaired !== undefined) {
       $set["printerSettings.isPaired"] = isPaired;
+    }
+    if (tokenLabel !== undefined) {
+      $set["printerSettings.tokenLabel"] = tokenLabel;
+    }
+    if (printLargeToken !== undefined) {
+      $set["printerSettings.printLargeToken"] = printLargeToken;
     }
 
     const restaurant = await Restaurant.findByIdAndUpdate(
@@ -631,7 +663,7 @@ exports.getSaleReceipt = async (req, res, next) => {
     const [sale, restaurant] = await Promise.all([
       Sale.findOne({ _id: id, restaurantId }).lean(),
       Restaurant.findById(restaurantId)
-        .select("name printerSettings")
+        .select("name phone printerSettings")
         .lean(),
     ]);
 

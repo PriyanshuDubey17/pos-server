@@ -28,6 +28,17 @@ const printerSettingsSchema = new Schema(
       enum: [1, 2],
       default: 1,
     },
+    /** Label printed above the daily number on the receipt slip */
+    tokenLabel: {
+      type: String,
+      enum: ["Token", "Bill", "Order"],
+      default: "Token",
+    },
+    /** Double-size token number on thermal print (some printers mishandle GS !) */
+    printLargeToken: {
+      type: Boolean,
+      default: true,
+    },
   },
   { _id: false }
 );

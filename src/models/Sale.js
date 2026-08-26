@@ -124,6 +124,20 @@ const saleSchema = new Schema(
       ref: "User",
       required: true,
     },
+
+    /** Frozen receipt label at confirm — history must not follow later settings */
+    tokenLabel: {
+      type: String,
+      enum: ["Token", "Bill", "Order"],
+      default: undefined,
+    },
+
+    /** Frozen restaurant phone at confirm (`null` = none that day) */
+    phone: {
+      type: String,
+      trim: true,
+      default: undefined,
+    },
   },
   { timestamps: true }
 );

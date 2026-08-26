@@ -46,18 +46,30 @@ const buildDayList = (fromYmd, toYmd) => {
   return days;
 };
 
-const resolvePeriodRange = (period) => {
+const resolvePeriodRange = ({ period, year, month }) => {
   const today = getKolkataYmd();
 
   if (period === "today") {
     return { from: today, to: today };
   }
 
-  const [yearStr, monthStr] = today.split("-");
-  const year = Number(yearStr);
-  const month = Number(monthStr);
+  const [todayYearStr, todayMonthStr] = today.split("-");
+  const currentYear = Number(todayYearStr);
+  const currentMonth = Number(todayMonthStr);
+  const resolvedYear = year ?? currentYear;
+  const resolvedMonth = month ?? currentMonth;
+
+  if (
+    resolvedYear > currentYear ||
+    (resolvedYear === currentYear && resolvedMonth > currentMonth)
+  ) {
+    throw new ApiError("Cannot load a future month.", 400);
+  }
+
+  const yearStr = String(resolvedYear);
+  const monthStr = String(resolvedMonth).padStart(2, "0");
   const from = `${yearStr}-${monthStr}-01`;
-  const last = daysInMonth(year, month);
+  const last = daysInMonth(resolvedYear, resolvedMonth);
   const to = `${yearStr}-${monthStr}-${String(last).padStart(2, "0")}`;
   return { from, to };
 };
@@ -69,7 +81,11 @@ exports.getReportSummary = async (req, res, next) => {
       String(restaurantId),
     );
     const period = req.query.period || "today";
-    const { from, to } = resolvePeriodRange(period);
+    const { from, to } = resolvePeriodRange({
+      period,
+      year: req.query.year,
+      month: req.query.month,
+    });
 
     const rangeStart = kolkataDayStartUtc(from);
     const rangeEnd = kolkataDayStartUtc(addDaysYmd(to, 1));
@@ -94,6 +110,24 @@ exports.getReportSummary = async (req, res, next) => {
             },
             sale: { $sum: "$totalAmount" },
             saleCount: { $sum: 1 },
+            cashSale: {
+              $sum: {
+                $cond: [
+                  { $eq: ["$paymentMethod", "Cash"] },
+                  "$totalAmount",
+                  0,
+                ],
+              },
+            },
+            upiSale: {
+              $sum: {
+                $cond: [
+                  { $eq: ["$paymentMethod", "UPI"] },
+                  "$totalAmount",
+                  0,
+                ],
+              },
+            },
           },
         },
       ]),
@@ -121,28 +155,38 @@ exports.getReportSummary = async (req, res, next) => {
         {
           sale: Number(row.sale) || 0,
           saleCount: Number(row.saleCount) || 0,
+          cashSale: Number(row.cashSale) || 0,
+          upiSale: Number(row.upiSale) || 0,
         },
       ]),
     );
 
+    const emptyDayTotals = {
+      sale: 0,
+      saleCount: 0,
+      cashSale: 0,
+      upiSale: 0,
+    };
+
     const dayKeys = buildDayList(from, to);
     const days = dayKeys.map((date) => {
-      const saleInfo = saleByDate.get(date) || {
-        sale: 0,
-        saleCount: 0,
-      };
+      const saleInfo = saleByDate.get(date) || emptyDayTotals;
       return {
         date,
         sale: saleInfo.sale,
+        cashSale: saleInfo.cashSale,
+        upiSale: saleInfo.upiSale,
       };
     });
 
     const totals = days.reduce(
       (acc, day) => {
         acc.sale += day.sale;
+        acc.cashSale += day.cashSale;
+        acc.upiSale += day.upiSale;
         return acc;
       },
-      { sale: 0, saleCount: 0 },
+      { sale: 0, saleCount: 0, cashSale: 0, upiSale: 0 },
     );
     totals.saleCount = [...saleByDate.values()].reduce(
       (n, row) => n + row.saleCount,

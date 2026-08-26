@@ -64,6 +64,14 @@ const updatePrinterSettingsSchema = z
         z.string().trim().max(120).nullable().optional(),
       ),
     isPaired: z.boolean().optional(),
+    tokenLabel: z
+      .enum(["Token", "Bill", "Order"], {
+        errorMap: () => ({
+          message: "Receipt number label must be Token, Bill, or Order",
+        }),
+      })
+      .optional(),
+    printLargeToken: z.boolean().optional(),
   })
   .strict()
   .refine(
@@ -72,7 +80,9 @@ const updatePrinterSettingsSchema = z
       body.autoPrintOnConfirm !== undefined ||
       body.receiptCopies !== undefined ||
       body.deviceLabel !== undefined ||
-      body.isPaired !== undefined,
+      body.isPaired !== undefined ||
+      body.tokenLabel !== undefined ||
+      body.printLargeToken !== undefined,
     { message: "At least one printer setting is required" },
   );
 
