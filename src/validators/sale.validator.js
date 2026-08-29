@@ -11,6 +11,12 @@ const confirmSaleSchema = z
     paymentMethod: z.enum(["Cash", "UPI"], {
       errorMap: () => ({ message: "Payment method must be Cash or UPI" }),
     }),
+    orderType: z
+      .enum(["Dine", "Parcel"], {
+        errorMap: () => ({ message: "Order type must be Dine or Parcel" }),
+      })
+      .optional()
+      .default("Dine"),
     items: z
       .array(
         z

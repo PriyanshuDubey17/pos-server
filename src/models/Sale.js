@@ -95,6 +95,12 @@ const saleSchema = new Schema(
       required: true,
     },
 
+    orderType: {
+      type: String,
+      enum: ["Dine", "Parcel"],
+      required: true,
+    },
+
     status: {
       type: String,
       enum: SALE_STATUSES,

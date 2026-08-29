@@ -9,6 +9,9 @@ const { resolveStockDeduct } = require("../utils/menuStock");
 /** Fixed POS payment options — not restaurant-configurable */
 const ALLOWED_PAYMENT_METHODS = ["Cash", "UPI"];
 
+/** Fixed POS order types — not restaurant-configurable */
+const ALLOWED_ORDER_TYPES = ["Dine", "Parcel"];
+
 const TOKEN_LABEL_OPTIONS = ["Token", "Bill", "Order"];
 
 const resolveTokenLabel = (value) =>
@@ -134,6 +137,7 @@ const buildReceiptPayload = ({ restaurant, sale }) => {
     })),
     totalAmount: sale.totalAmount,
     paymentMethod: sale.paymentMethod,
+    orderType: sale.orderType || null,
     paperWidth: restaurant.printerSettings?.paperWidth || "58",
     receiptCopies: restaurant.printerSettings?.receiptCopies === 2 ? 2 : 1,
     printLargeToken: restaurant.printerSettings?.printLargeToken !== false,
@@ -194,6 +198,7 @@ const applyConfirmSale = async ({
   restaurantId,
   userId,
   paymentMethod,
+  orderType,
   cartItems,
   session,
 }) => {
@@ -205,6 +210,10 @@ const applyConfirmSale = async ({
   const allowedMethods = ALLOWED_PAYMENT_METHODS;
   if (!allowedMethods.includes(paymentMethod)) {
     throw new ApiError("Payment method must be Cash or UPI", 400);
+  }
+
+  if (!ALLOWED_ORDER_TYPES.includes(orderType)) {
+    throw new ApiError("Order type must be Dine or Parcel", 400);
   }
 
   const menuItemIds = [
@@ -294,6 +303,7 @@ const applyConfirmSale = async ({
     items: saleLines,
     totalAmount,
     paymentMethod,
+    orderType,
     status: "completed",
     stockAdjustments,
     createdByUserId: userId,
@@ -436,6 +446,7 @@ exports.getPosMenu = async (req, res, next) => {
         categories,
         items: posItems,
         paymentMethods: ALLOWED_PAYMENT_METHODS,
+        orderTypes: ALLOWED_ORDER_TYPES,
         receiptCopies: printerSettings.receiptCopies,
         allowTwoReceiptCopies: !!restaurant?.allowTwoReceiptCopies,
         autoPrintOnConfirm: printerSettings.autoPrintOnConfirm,
@@ -596,7 +607,7 @@ exports.listSales = async (req, res, next) => {
         .sort({ soldAt: -1 })
         .skip(skip)
         .limit(limit)
-        .select("tokenNo soldAt totalAmount paymentMethod items status")
+        .select("tokenNo soldAt totalAmount paymentMethod orderType items status")
         .lean(),
       Sale.countDocuments(filter),
       Sale.aggregate([
@@ -617,6 +628,7 @@ exports.listSales = async (req, res, next) => {
       soldAt: sale.soldAt,
       totalAmount: sale.totalAmount,
       paymentMethod: sale.paymentMethod,
+      orderType: sale.orderType || null,
       status: sale.status || "completed",
       itemCount: Array.isArray(sale.items)
         ? sale.items.reduce((n, line) => n + (Number(line.qty) || 0), 0)
@@ -697,12 +709,13 @@ exports.confirmSale = async (req, res, next) => {
   try {
     const restaurantId = getTenantRestaurantId(req);
     const userId = req.user._id;
-    const { paymentMethod, items } = req.body;
+    const { paymentMethod, orderType, items } = req.body;
 
     const { sale, receiptPayload } = await confirmSaleWithEffects({
       restaurantId,
       userId,
       paymentMethod,
+      orderType,
       cartItems: items,
     });
 
