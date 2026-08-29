@@ -78,6 +78,7 @@ const createRestaurantSchema = z
       .max(150, "Restaurant name too long"),
     accessPlan: z.enum(ACCESS_PLANS).default("full"),
     status: z.enum(["pending", "active", "suspended"]).default("active"),
+    allowTwoReceiptCopies: z.boolean().optional(),
     phone: clearablePhoneSchema,
     email: clearableEmailSchema,
     owner: ownerSchema
@@ -98,6 +99,7 @@ const updateRestaurantSchema = z
       .optional(),
     accessPlan: z.enum(ACCESS_PLANS).optional(),
     status: z.enum(["pending", "active", "suspended"]).optional(),
+    allowTwoReceiptCopies: z.boolean().optional(),
     phone: clearablePhoneSchema,
     email: clearableEmailSchema,
     owner: z

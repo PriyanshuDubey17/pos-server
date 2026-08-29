@@ -385,7 +385,7 @@ exports.getPosMenu = async (req, res, next) => {
         )
         .lean(),
       Restaurant.findById(restaurantId)
-        .select("printerSettings")
+        .select("printerSettings allowTwoReceiptCopies")
         .lean(),
     ]);
 
@@ -437,6 +437,7 @@ exports.getPosMenu = async (req, res, next) => {
         items: posItems,
         paymentMethods: ALLOWED_PAYMENT_METHODS,
         receiptCopies: printerSettings.receiptCopies,
+        allowTwoReceiptCopies: !!restaurant?.allowTwoReceiptCopies,
         autoPrintOnConfirm: printerSettings.autoPrintOnConfirm,
         paperWidth: printerSettings.paperWidth,
         printerSettings,
@@ -487,7 +488,7 @@ exports.getPrinterSettings = async (req, res, next) => {
   try {
     const restaurantId = getTenantRestaurantId(req);
     const restaurant = await Restaurant.findById(restaurantId)
-      .select("printerSettings")
+      .select("printerSettings allowTwoReceiptCopies")
       .lean();
 
     if (!restaurant) {
@@ -496,7 +497,10 @@ exports.getPrinterSettings = async (req, res, next) => {
 
     res.status(200).json({
       success: true,
-      data: normalizePrinterSettings(restaurant.printerSettings),
+      data: {
+        ...normalizePrinterSettings(restaurant.printerSettings),
+        allowTwoReceiptCopies: !!restaurant.allowTwoReceiptCopies,
+      },
     });
   } catch (error) {
     next(error);

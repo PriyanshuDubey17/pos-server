@@ -83,6 +83,12 @@ const restaurantSchema = new Schema(
       index: true,
     },
 
+    /** Super admin permission: restaurant may show the POS 1|2 receipt-copy toggle */
+    allowTwoReceiptCopies: {
+      type: Boolean,
+      default: false,
+    },
+
     /** Business day key YYYY-MM-DD for daily token reset */
     tokenDate: {
       type: String,

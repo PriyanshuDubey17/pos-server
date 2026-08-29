@@ -49,6 +49,7 @@ const createRestaurantWithOwner = async ({
   name,
   accessPlan,
   status,
+  allowTwoReceiptCopies,
   phone,
   email,
   owner,
@@ -76,6 +77,7 @@ const createRestaurantWithOwner = async ({
     name,
     accessPlan,
     status,
+    allowTwoReceiptCopies: !!allowTwoReceiptCopies,
     phone: phone || owner.mobile || undefined,
     email: email || owner.email || undefined,
   };
