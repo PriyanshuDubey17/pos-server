@@ -46,11 +46,21 @@ const buildDayList = (fromYmd, toYmd) => {
   return days;
 };
 
-const resolvePeriodRange = ({ period, year, month }) => {
+const resolvePeriodRange = ({ period, year, month, date }) => {
   const today = getKolkataYmd();
 
   if (period === "today") {
     return { from: today, to: today };
+  }
+
+  if (period === "day") {
+    if (!date) {
+      throw new ApiError("date is required for a day report.", 400);
+    }
+    if (date > today) {
+      throw new ApiError("Cannot load a future day.", 400);
+    }
+    return { from: date, to: date };
   }
 
   const [todayYearStr, todayMonthStr] = today.split("-");
@@ -85,6 +95,7 @@ exports.getReportSummary = async (req, res, next) => {
       period,
       year: req.query.year,
       month: req.query.month,
+      date: req.query.date,
     });
 
     const rangeStart = kolkataDayStartUtc(from);
