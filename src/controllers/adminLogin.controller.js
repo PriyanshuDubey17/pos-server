@@ -13,6 +13,10 @@ const {
   assertRestaurantAdminCanAccess,
 } = require("../utils/buildAdminAuthPayload");
 const {
+  isPlayReviewPhone,
+  matchesPlayReviewOtp,
+} = require("../utils/playReviewLogin");
+const {
   ADMIN_ACCESS_TOKEN,
   ADMIN_REFRESH_TOKEN,
   getCookieBaseOptions,
@@ -80,6 +84,21 @@ const clearTokenCookies = (res) => {
   res.clearCookie(ADMIN_REFRESH_TOKEN, cookieOptions);
 };
 
+const issueAdminLoginSession = async (res, user) => {
+  const authPayload = await buildAdminAuthPayload(user);
+  const accessToken = generateAccessToken(user);
+  const refreshToken = generateRefreshToken(user);
+
+  setTokenCookies(res, accessToken, refreshToken);
+  await User.updateOne({ _id: user._id }, { $set: { lastLoginAt: new Date() } });
+
+  return new ApiResponse(200, "Login successful", {
+    ...authPayload,
+    accessToken,
+    refreshToken,
+  });
+};
+
 /* ─────────────────────────────────────────────────────────
    📤 SEND OTP
    ─────────────────────────────────────────────────────────
@@ -119,6 +138,11 @@ const sendOtp = async (req, res, next) => {
 
     // Step 3b: restaurant_admin — restaurant must be active
     await assertRestaurantAdminCanAccess(user);
+
+    if (isPlayReviewPhone(phone)) {
+      const response = new ApiResponse(200, "OTP sent successfully");
+      return res.status(200).json(response);
+    }
 
     // Step 4: Cooldown — prevent OTP flooding (60 seconds)
     const existingOtp = await Otp.findOne({
@@ -223,6 +247,14 @@ const verifyOtp = async (req, res, next) => {
     // restaurant_admin — restaurant must be active before OTP consume
     await assertRestaurantAdminCanAccess(user);
 
+    if (isPlayReviewPhone(phone)) {
+      if (!matchesPlayReviewOtp(otp)) {
+        return next(new ApiError("Invalid OTP.", 401));
+      }
+      const response = await issueAdminLoginSession(res, user);
+      return res.status(200).json(response);
+    }
+
     // Step 2: Find OTP document
     const otpDoc = await Otp.findOne({
       userId: user._id,
@@ -290,26 +322,9 @@ const verifyOtp = async (req, res, next) => {
       );
     }
 
-    // Step 6: ✅ OTP matched — build auth payload, then issue tokens
-    const authPayload = await buildAdminAuthPayload(user);
-
-    const accessToken = generateAccessToken(user);
-    const refreshToken = generateRefreshToken(user);
-
-    // Set httpOnly cookies (web); also return tokens for mobile Bearer clients
-    setTokenCookies(res, accessToken, refreshToken);
-
-    // Update lastLoginAt (avoid full-doc validate on legacy fields)
-    await User.updateOne({ _id: user._id }, { $set: { lastLoginAt: new Date() } });
-
-    // 🗑️ Delete OTP doc — prevent replay attack
+    // Step 6: OTP matched — issue tokens, then delete OTP so it cannot be replayed
+    const response = await issueAdminLoginSession(res, user);
     await Otp.deleteOne({ _id: otpDoc._id });
-
-    const response = new ApiResponse(200, "Login successful", {
-      ...authPayload,
-      accessToken,
-      refreshToken,
-    });
     res.status(200).json(response);
   } catch (error) {
     next(error);

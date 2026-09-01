@@ -5,6 +5,7 @@
   "main": "server.js",
   "scripts": {
     "dev": "nodemon server.js",
+    "seed:play-review": "node scripts/seedPlayReviewRestaurant.js",
     "test": "node --test tests/**/*.test.js"
   },
   "keywords": [
